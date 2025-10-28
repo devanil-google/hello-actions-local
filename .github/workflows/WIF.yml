@@ -1,0 +1,73 @@
+# This workflow builds a local image, scans it with your custom action,
+# and only pushes to GAR if the scan is successful.
+
+name: WIF Build, Scan, and Push Docker Image
+
+on:
+  push:
+    branches: [ "main" ] # Triggers on push to the main branch
+  workflow_dispatch: # Allows manual triggering
+
+# Set environment variables for the entire workflow
+env:
+  IMAGE_NAME: vulnerable-app-demo1 # The local name for the image
+
+jobs:
+  build-scan-push:
+    runs-on: ubuntu-latest
+    
+    # Permissions are required for the custom action to use WIF
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 1. DOCKER BUILD
+      # Build the image with a simple local name
+      - name: Build Docker image
+        run: |
+          echo "Building local image: $IMAGE_NAME:${{ github.sha }}"
+          docker build -t $IMAGE_NAME:${{ github.sha }}  -t $IMAGE_NAME:latest .
+
+      # 2. VULNERABILITY SCAN (The Demo Step)s
+      # This step runs your scc artifactguardkaction.
+      # It scans the local image AND authenticates to GCP for the next stepse.
+      - name: Scan image with SCC artifactguard Scanner
+        uses: ./.github/actions/scc-artifactguard-scanner 
+        with:
+          # --- Image to Scan (use local name) ---
+          IMAGE_NAME_TO_SCAN: ${{ env.IMAGE_NAME }}
+          IMAGE_TAG: ${{ github.sha }}  # Scan the specific commit SHA tag
+
+          # --- Scanner Configuration (from Secrets) ---
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          ORGANIZATION_ID: ${{ secrets.ORGANIZATION_ID }}
+          CONNECTOR_ID: ${{ secrets.CONNECTOR_ID }}
+          SCANNER_IMAGE: ${{ secrets.SCANNER_IMAGE }}
+
+          # --- Auth Configuration (from Secrets) ---
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          
+          # --- Behavior ---
+          IGNORE_SERVER_ERRORS: 'false'
+          VERBOSITY: 'LOW'
+
+      # 3. DOCKER PUSH
+      # This step only runs if the scan passed.
+      # The custom scanner action already ran `gcloud auth configure-docker`.
+      - name: Push Docker image to Artifact Registry
+        run: |
+          # Define the full image path using secrets
+          GAR_IMAGE_PATH="${{ secrets.GAR_LOCATION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GAR_REPOSITORY }}/${{ env.IMAGE_NAME }}"
+          
+          echo "Tagging local image for GAR: $GAR_IMAGE_PATH"
+          docker tag $IMAGE_NAME:latest $GAR_IMAGE_PATH:latest
+          docker tag $IMAGE_NAME:${{ github.sha }} $GAR_IMAGE_PATH:${{ github.sha }}
+          
+          echo "Pushing images to GAR..."
+          docker push $GAR_IMAGE_PATH:latest
+          docker push $GAR_IMAGE_PATH:${{ github.sha }}
