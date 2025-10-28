@@ -1,0 +1,126 @@
+name: 'Custom Image Scanner'
+description: 'Runs the custom containerized scanner and handles exit codes.'
+
+# Define all the parameters (inputs) the action will accept
+inputs:
+  IMAGE_NAME_TO_SCAN:
+    description: 'The full name of the Docker image to scan (e.g., us-central1-docker.pkg.dev/my-project/my-image)'
+    required: true
+  IMAGE_TAG:
+    description: 'The tag of the image to scan'
+    required: true
+    default: 'latest'
+  GCP_PROJECT_ID:
+    description: 'GCP Project ID for authentication and configuration'
+    required: true
+  ORGANIZATION_ID:
+    description: 'Your GCP Organization ID'
+    required: true
+  CONNECTOR_ID:
+    description: 'The ID for your pipeline connector'
+    required: true
+  SCANNER_IMAGE:
+    description: 'The Docker image that contains the scanner script'
+    required: true
+    default: 'us-central1-docker.pkg.dev/ci-plugin/ci-images/scc-artifactguard-scan-image:latest'
+  IGNORE_SERVER_ERRORS:
+    description: 'If true, the pipeline continues on server/internal scanner errors.'
+    required: false
+    default: 'false'
+  GCP_WORKLOAD_IDENTITY_PROVIDER:
+    description: 'The full WIF provider URI'
+    required: true
+  GCP_SERVICE_ACCOUNT:
+    description: 'The service account email to impersonate'
+    required: true
+  VERBOSITY:
+    description: 'Verbosity flag'
+    required: false
+    default: 'LOW'
+
+# Define what permissions this action needs to run
+permissions:
+  contents: 'read'
+  id-token: 'write' # Required for WIF authentication
+
+runs:
+  using: "composite" # This acton is a composite of several shell steps
+  steps:
+    # Step 1: Authenticate and create credential file for the scanner
+    - name: 'Authenticate to Google Cloud'
+      id: 'auth'
+      uses: 'google-github-actions/auth@v2'
+      with:
+        workload_identity_provider: ${{ inputs.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        service_account: ${{ inputs.GCP_SERVICE_ACCOUNT }}
+        create_credentials_file: true
+
+    # Step 2: Set up gcloud SDK
+    - name: 'Set up gcloud SDK'
+      uses: 'google-github-actions/setup-gcloud@v2'
+
+    # Step 3: Configure Docker for registries (e.g., to pull the scanner image)
+    - name: 'Configure Docker for Artifact Registry'
+      shell: bash
+      run: |
+        gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+        gcloud auth configure-docker gcr.io --quiet
+
+    # Step 4: Run the scanssd
+    # We pass all inputs as environment vddariables to the shell script
+    - name: 'Run Image Analysis Scan'
+      shell: bash
+      run: |
+        #!/bin/bash
+
+        echo "📦 Running container from scanner image: $INPUT_SCANNER_IMAGE"
+
+        # Variable to store exit code
+        exit_code=0
+
+        # Run docker and capture exit code using || trick
+        # Note: We now use the env vars passed from the action.yml
+        docker run --rm \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v ${{ steps.auth.outputs.credentials_file_path }}:/gcp-creds.json \
+          -e GOOGLE_APPLICATION_CREDENTIALS=/gcp-creds.json \
+          -e GCP_PROJECT_ID="${INPUT_GCP_PROJECT_ID}" \
+          -e ORGANIZATION_ID="${INPUT_ORGANIZATION_ID}" \
+          -e IMAGE_NAME="${INPUT_IMAGE_NAME_TO_SCAN}" \
+          -e IMAGE_TAG="${INPUT_IMAGE_TAG}" \
+          -e CONNECTOR_ID="${INPUT_CONNECTOR_ID}" \
+          -e VERBOSITY="${INPUT_VERBOSITY}" \
+          -e RUN_ID="${{ github.workflow }}" \
+          "${INPUT_SCANNER_IMAGE}" \
+          || exit_code=$?
+
+        echo "Docker run finished with exit code: $exit_code"
+
+        # --- Replicate Jenkins Exit Code Logic ---
+        if [ $exit_code -eq 0 ]; then
+          echo "✅ Evaluation succeeded: Conformant image."
+        elif [ $exit_code -eq 1 ]; then
+          echo "❌ Scan failed: Non-conformant image (vulnerabilities found)."
+          exit 1 # Fail the step
+        else
+          if [ "$INPUT_IGNORE_SERVER_ERRORS" = "true" ]; then
+            echo "⚠️ Server/internal error occurred (Code: $exit_code), but IGNORE_SERVER_ERRORS=true. Proceeding."
+            # Do nothing, step passes
+          else
+            echo "❌ Server/internal error occurred (Code: $exit_code) during evaluation. Set IGNORE_SERVER_ERRORS=true to override."
+            exit 1 # Fail the step
+          fi
+        fi
+      env:
+        # Pass all action inputs to the script as environment variables
+        INPUT_IMAGE_NAME_TO_SCAN: ${{ inputs.IMAGE_NAME_TO_SCAN }}
+        INPUT_IMAGE_TAG: ${{ inputs.IMAGE_TAG }}
+        INPUT_GCP_PROJECT_ID: ${{ inputs.GCP_PROJECT_ID }}
+        INPUT_ORGANIZATION_ID: ${{ inputs.ORGANIZATION_ID }}
+        INPUT_CONNECTOR_ID: ${{ inputs.CONNECTOR_ID }}
+        INPUT_SCANNER_IMAGE: ${{ inputs.SCANNER_IMAGE }}
+        INPUT_IGNORE_SERVER_ERRORS: ${{ inputs.IGNORE_SERVER_ERRORS }}
+        INPUT_VERBOSITY: ${{ inputs.VERBOSITY }}
+        # Pass GitHub-specific variables
+        GITHUB_WORKFLOW_NAME: ${{ github.workflow }}
+        GITHUB_RUN_NUMBER: ${{ github.run_number }}
