@@ -57,9 +57,9 @@ jobs:
     env:
       IMAGE_NAME_TO_SCAN: 'checkout-image'
       GCP_PROJECT_ID: 'cispoc'
-      AR_REPOSITORY: 'my-app-repo'
+      AR_REPOSITORY: 'demo-images'
       ORGANIZATION_ID: '714470867684'
-      CONNECTOR_ID: 'organizations/714470867684/locations/global/connectors/privatepreviewdemo'
+      CONNECTOR_ID: 'organizations/714470867684/locations/global/connectors/testing-demo'
       SCANNER_IMAGE: 'us-central1-docker.pkg.dev/ci-plugin/ci-images/scc-artifactguard-scan-image:latest'
       IMAGE_TAG: 'latest'
       IGNORE_SERVER_ERRORS: 'false'
@@ -129,8 +129,7 @@ jobs:
             -e IMAGE_NAME="${IMAGE_NAME}" \
             -e IMAGE_TAG="${IMAGE_TAG}" \
             -e CONNECTOR_ID="${CONNECTOR_ID}" \
-            -e BUILD_TAG="${{ github.workflow }}" \
-            -e BUILD_ID="${{ github.run_number }}" \
+            -e RUN_ID="${{ github.run_number }}" \
             -e VERBOSITY="${VERBOSITY}" \
             "${SCANNER_IMAGE}" \
             || exit_code=$?
