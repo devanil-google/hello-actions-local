@@ -1,15 +1,18 @@
-# 1. Use an old, end-of-life base image
-# Debian 8 (Jessie) went EOL in June 2020.
-# Its repositories are frozen with old, vulnerable packages.
-FROM debian:8
+# 1. Use an EOL Ubuntu image
+# Ubuntu 16.04 (Xenial) went EOL in April 2021.
+FROM ubuntu:16.04
 
-# 2. Install a batch of old, vulnerable services and libraries
-# We intentionally suppress warnings and force 'yes' to get everything installed.
+# 2. Install old packages (PHP 7.0 instead of 5, but still very old)
 RUN apt-get update && \
-    apt-get install -y --force-yes \
+    # Add 'software-properties-common' to get 'add-apt-repository'
+    apt-get install -y software-properties-common && \
+    # Add an old PHP repo to get php7.0
+    add-apt-repository -y ppa:ondrej/php && \
+    apt-get update && \
+    apt-get install -y \
     apache2 \
-    php5 \
-    php5-cli \
+    php7.0 \
+    php7.0-cli \
     curl \
     wget \
     libssl1.0.0 \
@@ -18,7 +21,6 @@ RUN apt-get update && \
     && apt-get clean
 
 # 3. Manually add a specific, famously vulnerable library (Log4j 2.14.1)
-# This version is vulnerable to Log4Shell (CVE-2021-44228).
 RUN wget https://archive.apache.org/dist/logging/log4j/2.14.1/apache-log4j-2.14.1-bin.tar.gz -P /tmp && \
     tar -xzf /tmp/apache-log4j-2.14.1-bin.tar.gz -C /opt/ && \
     ln -s /opt/apache-log4j-2.14.1-bin/log4j-core-2.14.1.jar /usr/lib/log4j-core.jar && \
